@@ -1,19 +1,13 @@
 import asyncio
 import os
+import base64
 import logging
 from datetime import datetime, timezone
-
 
 import discord
 from discord.ext import commands
 from telethon import TelegramClient, events
-from telethon.tl.types import User
 from dotenv import load_dotenv
-import os
-
-TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
-
-print("TOKEN:", TG_BOT_TOKEN)
 
 load_dotenv()
 
@@ -25,17 +19,26 @@ logging.basicConfig(
 log = logging.getLogger("bot")
 
 # ── Config from .env ───────────────────────────────────────────────────────────
-DISCORD_TOKEN      = os.getenv("DISCORD_TOKEN")
+DISCORD_TOKEN        = os.getenv("DISCORD_TOKEN")
 DISCORD_CHANNEL_ID   = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
-DISCORD_CHANNEL_NAME = os.getenv("DISCORD_CHANNEL_NAME", "")  # например: ивенты
-TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
-TG_API_ID   = int(os.getenv("TG_API_ID", "0"))
-TG_API_HASH = os.getenv("TG_API_HASH")
-TG_SESSION  = os.getenv("TG_SESSION", "session")
+DISCORD_CHANNEL_NAME = os.getenv("DISCORD_CHANNEL_NAME", "")
+
+TG_API_ID        = int(os.getenv("TG_API_ID", "0"))
+TG_API_HASH      = os.getenv("TG_API_HASH")
+TG_SESSION       = os.getenv("TG_SESSION", "session")
+TG_SESSION_B64   = os.getenv("TG_SESSION_B64", "")  # для Railway
 
 TG_TARGET_BOT    = os.getenv("TG_TARGET_BOT", "@FunTimeEventsBot_bot")
 TG_TRIGGER_MSG   = os.getenv("TG_TRIGGER_MSG", "Текущие ивенты")
-TG_RESPONSE_WAIT = int(os.getenv("TG_RESPONSE_WAIT", "15"))  # секунд ожидания
+TG_RESPONSE_WAIT = int(os.getenv("TG_RESPONSE_WAIT", "15"))
+
+# ── Восстановление session.session из base64 (для Railway) ─────────────────────
+if TG_SESSION_B64:
+    session_path = f"{TG_SESSION}.session"
+    if not os.path.exists(session_path):
+        with open(session_path, "wb") as f:
+            f.write(base64.b64decode(TG_SESSION_B64))
+        log.info("session.session восстановлен из TG_SESSION_B64")
 
 # ── Discord setup ──────────────────────────────────────────────────────────────
 intents = discord.Intents.default()
@@ -45,18 +48,10 @@ discord_bot = commands.Bot(command_prefix="/", intents=intents)
 # ── Telegram setup ─────────────────────────────────────────────────────────────
 tg_client = TelegramClient(TG_SESSION, TG_API_ID, TG_API_HASH)
 
-# Очередь для передачи ответа от TG в Discord
-response_queue: asyncio.Queue = asyncio.Queue()
-
 
 async def fetch_events_from_tg() -> str | None:
-    """
-    Отправляет сообщение-триггер боту в Telegram и ждёт его ответа.
-    Возвращает текст ответа или None при таймауте.
-    """
     log.info("Отправляю '%s' → %s", TG_TRIGGER_MSG, TG_TARGET_BOT)
 
-    # Получаем entity бота
     try:
         target = await tg_client.get_entity(TG_TARGET_BOT)
     except Exception as exc:
@@ -64,8 +59,6 @@ async def fetch_events_from_tg() -> str | None:
         return None
 
     bot_id = target.id
-
-    # Временный обработчик — ловит первый ответ от нужного бота
     future: asyncio.Future = asyncio.get_event_loop().create_future()
 
     @tg_client.on(events.NewMessage(from_users=bot_id))
@@ -94,15 +87,11 @@ async def on_ready():
 
 @discord_bot.command(name="event")
 async def event_command(ctx: commands.Context):
-    """Получает текущие ивенты из Telegram и постит в канал Discord."""
-    # Отвечаем сразу, чтобы пользователь знал — запрос принят
     waiting_msg = await ctx.send("⏳ Запрашиваю ивенты из Telegram, подождите...")
 
     tg_text = await fetch_events_from_tg()
-
     await waiting_msg.delete()
 
-    # Ищем канал: сначала по названию, потом по ID, иначе текущий канал
     channel = None
     if DISCORD_CHANNEL_NAME:
         channel = discord.utils.get(ctx.guild.text_channels, name=DISCORD_CHANNEL_NAME)
@@ -129,11 +118,10 @@ async def event_command(ctx: commands.Context):
 
 # ── Запуск ─────────────────────────────────────────────────────────────────────
 async def main():
-    # Сначала подключаемся к Telegram
-    await tg_client.start(bot_token=TG_BOT_TOKEN)
+    # Запускаем как user client (БЕЗ bot_token!)
+    await tg_client.start()
     log.info("Telegram клиент подключён")
 
-    # Потом запускаем Discord бота
     await discord_bot.start(DISCORD_TOKEN)
 
 
