@@ -1,127 +1,109 @@
-import asyncio
 import os
+import asyncio
 import logging
-from datetime import datetime, timezone
+from dotenv import load_dotenv
 
 import discord
 from discord.ext import commands
 from telethon import TelegramClient, events
-from telethon.tl.types import User
-from dotenv import load_dotenv
 
+# Загрузка переменных из .env
 load_dotenv()
 
-# ── Logging ────────────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
-log = logging.getLogger("bot")
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# ── Config from .env ───────────────────────────────────────────────────────────
-DISCORD_TOKEN      = os.getenv("DISCORD_TOKEN")
-DISCORD_CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
-
-TG_API_ID   = int(os.getenv("TG_API_ID", "0"))
+# Переменные окружения
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+DISCORD_CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", 0))
+TG_API_ID = int(os.getenv("TG_API_ID"))
 TG_API_HASH = os.getenv("TG_API_HASH")
-TG_SESSION  = os.getenv("TG_SESSION", "session")
+TG_TARGET_BOT = os.getenv("TG_TARGET_BOT")   # например: FunTimeEventsBot_bot
+TG_RESPONSE_WAIT = int(os.getenv("TG_RESPONSE_WAIT", 15))
 
-TG_TARGET_BOT    = os.getenv("TG_TARGET_BOT", "@FunTimeEventsBot_bot")
-TG_TRIGGER_MSG   = os.getenv("TG_TRIGGER_MSG", "Текущие ивенты")
-TG_RESPONSE_WAIT = int(os.getenv("TG_RESPONSE_WAIT", "15"))  # секунд ожидания
+# Очередь для ответов от Telegram
+response_queue = asyncio.Queue()
 
-# ── Discord setup ──────────────────────────────────────────────────────────────
-intents = discord.Intents.default()
-intents.message_content = True
-discord_bot = commands.Bot(command_prefix="/", intents=intents)
+# Telegram клиент (используем существующий файл сессии "session")
+tg_client = TelegramClient("session", TG_API_ID, TG_API_HASH)
 
-# ── Telegram setup ─────────────────────────────────────────────────────────────
-tg_client = TelegramClient(TG_SESSION, TG_API_ID, TG_API_HASH)
+# ---------- Discord бот ----------
+class DiscordBot(commands.Bot):
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.message_content = True
+        super().__init__(command_prefix='/', intents=intents)
+        self.response_wait = TG_RESPONSE_WAIT
 
-# Очередь для передачи ответа от TG в Discord
-response_queue: asyncio.Queue = asyncio.Queue()
+    async def on_ready(self):
+        logger.info(f"✅ Discord бот {self.user} готов")
 
+    async def wait_for_response(self, timeout=None):
+        """Ожидает ответ из очереди response_queue"""
+        if timeout is None:
+            timeout = self.response_wait
+        try:
+            return await asyncio.wait_for(response_queue.get(), timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.error("Таймаут ожидания ответа от Telegram")
+            raise
 
-async def fetch_events_from_tg() -> str | None:
-    """
-    Отправляет сообщение-триггер боту в Telegram и ждёт его ответа.
-    Возвращает текст ответа или None при таймауте.
-    """
-    log.info("Отправляю '%s' → %s", TG_TRIGGER_MSG, TG_TARGET_BOT)
+    async def send_to_telegram(self, text: str):
+        """Отправляет текст в Telegram боту"""
+        if not tg_client or not tg_client.is_connected():
+            logger.error("Telegram клиент не подключён")
+            return
+        try:
+            await tg_client.send_message(TG_TARGET_BOT, text)
+            logger.info(f"Отправлено в Telegram: {text}")
+        except Exception as e:
+            logger.exception("Ошибка отправки в Telegram")
 
-    # Получаем entity бота
-    try:
-        target = await tg_client.get_entity(TG_TARGET_BOT)
-    except Exception as exc:
-        log.error("Не удалось получить entity бота TG: %s", exc)
-        return None
+    # ---------- Команда /event ----------
+    @commands.command(name='event')
+    async def event(self, ctx, *, arg: str = None):
+        """Отправляет /event в Telegram и пересылает ответ"""
+        msg = f"/event {arg}" if arg else "/event"
+        await self.send_to_telegram(msg)
+        try:
+            response = await self.wait_for_response()
+            await ctx.send(f"```\n{response}\n```")
+        except asyncio.TimeoutError:
+            await ctx.send(f"❌ Telegram бот не ответил за {self.response_wait} сек.")
 
-    bot_id = target.id
+    # ---------- Команда /mine (НОВАЯ) ----------
+    @commands.command(name='mine')
+    async def mine(self, ctx):
+        """Отправляет 'Шахты' в Telegram и пересылает ответ"""
+        msg = "Шахты"
+        await self.send_to_telegram(msg)
+        try:
+            response = await self.wait_for_response()
+            await ctx.send(f"```\n{response}\n```")
+        except asyncio.TimeoutError:
+            await ctx.send(f"❌ Telegram бот не ответил на 'Шахты' за {self.response_wait} сек.")
+        except Exception as e:
+            await ctx.send(f"⚠️ Ошибка: {e}")
 
-    # Временный обработчик — ловит первый ответ от нужного бота
-    future: asyncio.Future = asyncio.get_event_loop().create_future()
+# ---------- Обработчик сообщений Telegram ----------
+@tg_client.on(events.NewMessage(chats=TG_TARGET_BOT))
+async def telegram_handler(event):
+    """Получает ответ от Telegram бота и кладёт в очередь"""
+    if event.message.text:
+        logger.info(f"Получен ответ от Telegram: {event.message.text[:50]}...")
+        await response_queue.put(event.message.text)
 
-    @tg_client.on(events.NewMessage(from_users=bot_id))
-    async def _handler(event):
-        if not future.done():
-            future.set_result(event.message.text)
-
-    await tg_client.send_message(target, TG_TRIGGER_MSG)
-
-    try:
-        result = await asyncio.wait_for(future, timeout=TG_RESPONSE_WAIT)
-        log.info("Получен ответ от TG-бота (%d символов)", len(result))
-        return result
-    except asyncio.TimeoutError:
-        log.warning("Таймаут: бот TG не ответил за %d сек.", TG_RESPONSE_WAIT)
-        return None
-    finally:
-        tg_client.remove_event_handler(_handler)
-
-
-# ── Discord команды ────────────────────────────────────────────────────────────
-@discord_bot.event
-async def on_ready():
-    log.info("Discord бот запущен как %s (id=%s)", discord_bot.user, discord_bot.user.id)
-
-
-@discord_bot.command(name="event")
-async def event_command(ctx: commands.Context):
-    """Получает текущие ивенты из Telegram и постит в канал Discord."""
-    # Отвечаем сразу, чтобы пользователь знал — запрос принят
-    waiting_msg = await ctx.send("⏳ Запрашиваю ивенты из Telegram, подождите...")
-
-    tg_text = await fetch_events_from_tg()
-
-    await waiting_msg.delete()
-
-    channel = discord_bot.get_channel(DISCORD_CHANNEL_ID) or ctx.channel
-
-    if tg_text:
-        embed = discord.Embed(
-            title="🎉 Текущие ивенты",
-            description=tg_text,
-            color=0x5865F2,
-            timestamp=datetime.now(timezone.utc),
-        )
-        embed.set_footer(text=f"Источник: {TG_TARGET_BOT}")
-        await channel.send(embed=embed)
-    else:
-        await channel.send(
-            "❌ Не удалось получить ивенты — бот Telegram не ответил. "
-            "Попробуй чуть позже или увеличь `TG_RESPONSE_WAIT` в `.env`."
-        )
-
-
-# ── Запуск ─────────────────────────────────────────────────────────────────────
+# ---------- Запуск ----------
 async def main():
-    # Сначала подключаемся к Telegram
+    # Запускаем Telegram клиента
     await tg_client.start()
-    log.info("Telegram клиент подключён")
+    logger.info("✅ Telegram клиент запущен")
 
-    # Потом запускаем Discord бота
-    await discord_bot.start(DISCORD_TOKEN)
-
+    # Запускаем Discord бота
+    bot = DiscordBot()
+    async with bot:
+        await bot.start(DISCORD_TOKEN)
 
 if __name__ == "__main__":
     asyncio.run(main())
