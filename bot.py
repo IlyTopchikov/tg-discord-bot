@@ -20,7 +20,8 @@ log = logging.getLogger("bot")
 
 # ── Config from .env ───────────────────────────────────────────────────────────
 DISCORD_TOKEN      = os.getenv("DISCORD_TOKEN")
-DISCORD_CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
+DISCORD_CHANNEL_ID   = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
+DISCORD_CHANNEL_NAME = os.getenv("DISCORD_CHANNEL_NAME", "")  # например: ивенты
 
 TG_API_ID   = int(os.getenv("TG_API_ID", "0"))
 TG_API_HASH = os.getenv("TG_API_HASH")
@@ -95,7 +96,14 @@ async def event_command(ctx: commands.Context):
 
     await waiting_msg.delete()
 
-    channel = discord_bot.get_channel(DISCORD_CHANNEL_ID) or ctx.channel
+    # Ищем канал: сначала по названию, потом по ID, иначе текущий канал
+    channel = None
+    if DISCORD_CHANNEL_NAME:
+        channel = discord.utils.get(ctx.guild.text_channels, name=DISCORD_CHANNEL_NAME)
+    if channel is None and DISCORD_CHANNEL_ID:
+        channel = discord_bot.get_channel(DISCORD_CHANNEL_ID)
+    if channel is None:
+        channel = ctx.channel
 
     if tg_text:
         embed = discord.Embed(
