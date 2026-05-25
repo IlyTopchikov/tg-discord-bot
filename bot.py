@@ -9,6 +9,11 @@ from discord.ext import commands
 from telethon import TelegramClient, events
 from telethon.tl.types import User
 from dotenv import load_dotenv
+import os
+
+TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
+
+print("TOKEN:", TG_BOT_TOKEN)
 
 load_dotenv()
 
@@ -126,7 +131,6 @@ async def event_command(ctx: commands.Context):
 async def main():
     # Сначала подключаемся к Telegram
     await tg_client.start(bot_token=TG_BOT_TOKEN)
-    print("TG_BOT_TOKEN =", TG_BOT_TOKEN)
     log.info("Telegram клиент подключён")
 
     # Потом запускаем Discord бота
