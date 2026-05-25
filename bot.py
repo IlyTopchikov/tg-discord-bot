@@ -124,7 +124,7 @@ async def event_command(ctx: commands.Context):
 # ── Запуск ─────────────────────────────────────────────────────────────────────
 async def main():
     # Сначала подключаемся к Telegram
-    await tg_client.start()
+    await tg_client.start(bot_token=TG_BOT_TOKEN)
     log.info("Telegram клиент подключён")
 
     # Потом запускаем Discord бота
