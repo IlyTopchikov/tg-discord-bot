@@ -3,6 +3,7 @@ import os
 import logging
 from datetime import datetime, timezone
 
+
 import discord
 from discord.ext import commands
 from telethon import TelegramClient, events
@@ -22,7 +23,7 @@ log = logging.getLogger("bot")
 DISCORD_TOKEN      = os.getenv("DISCORD_TOKEN")
 DISCORD_CHANNEL_ID   = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
 DISCORD_CHANNEL_NAME = os.getenv("DISCORD_CHANNEL_NAME", "")  # например: ивенты
-
+TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
 TG_API_ID   = int(os.getenv("TG_API_ID", "0"))
 TG_API_HASH = os.getenv("TG_API_HASH")
 TG_SESSION  = os.getenv("TG_SESSION", "session")
