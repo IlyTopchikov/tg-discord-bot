@@ -27,23 +27,27 @@ DISCORD_CHANNEL_NAME = os.getenv("DISCORD_CHANNEL_NAME", "")
 TG_API_ID        = int(os.getenv("TG_API_ID", "0"))
 TG_API_HASH      = os.getenv("TG_API_HASH")
 TG_SESSION       = os.getenv("TG_SESSION", "session")
-TG_SESSION_B64C  = os.getenv("TG_SESSION_B64C", "")  # сжатая сессия для Railway
+TG_SESSION_B64C  = os.getenv("TG_SESSION_B64C", "")
 
 TG_TARGET_BOT    = os.getenv("TG_TARGET_BOT", "@FunTimeEventsBot_bot")
 TG_TRIGGER_MSG   = os.getenv("TG_TRIGGER_MSG", "Текущие ивенты")
 TG_RESPONSE_WAIT = int(os.getenv("TG_RESPONSE_WAIT", "15"))
 
-# ── Восстановление session.session из переменной окружения ─────────────────────
+# ── Восстановление session.session ─────────────────────────────────────────────
+session_path = f"{TG_SESSION}.session"
+log.info("TG_SESSION_B64C длина: %d", len(TG_SESSION_B64C))
+log.info("session.session существует: %s", os.path.exists(session_path))
+
 if TG_SESSION_B64C:
-    session_path = f"{TG_SESSION}.session"
-    if not os.path.exists(session_path):
-        try:
-            raw = zlib.decompress(base64.b64decode(TG_SESSION_B64C))
-            with open(session_path, "wb") as f:
-                f.write(raw)
-            log.info("session.session восстановлен из TG_SESSION_B64C")
-        except Exception as e:
-            log.error("Ошибка восстановления сессии: %s", e)
+    try:
+        raw = zlib.decompress(base64.b64decode(TG_SESSION_B64C))
+        with open(session_path, "wb") as f:
+            f.write(raw)
+        log.info("✅ session.session восстановлен (%d байт)", len(raw))
+    except Exception as e:
+        log.error("❌ Ошибка восстановления сессии: %s", e)
+else:
+    log.warning("⚠️ TG_SESSION_B64C не задан — сессия не будет восстановлена!")
 
 # ── Discord ────────────────────────────────────────────────────────────────────
 intents = discord.Intents.default()
@@ -55,9 +59,7 @@ tg_client = TelegramClient(TG_SESSION, TG_API_ID, TG_API_HASH)
 
 
 async def fetch_events_from_tg() -> str | None:
-    """Пишет в TG-бот и ждёт ответа."""
     log.info("Запрашиваю ивенты из %s", TG_TARGET_BOT)
-
     try:
         target = await tg_client.get_entity(TG_TARGET_BOT)
     except Exception as e:
@@ -91,13 +93,10 @@ async def on_ready():
 
 @discord_bot.command(name="event")
 async def event_command(ctx: commands.Context):
-    """Команда /event — получает ивенты из Telegram и постит в канал."""
     msg = await ctx.send("⏳ Запрашиваю ивенты из Telegram...")
-
     tg_text = await fetch_events_from_tg()
     await msg.delete()
 
-    # Находим нужный канал
     channel = None
     if DISCORD_CHANNEL_NAME:
         channel = discord.utils.get(ctx.guild.text_channels, name=DISCORD_CHANNEL_NAME)
@@ -120,8 +119,9 @@ async def event_command(ctx: commands.Context):
 
 
 async def main():
+    log.info("Запускаю Telegram клиент...")
     await tg_client.start()
-    log.info("Telegram подключён")
+    log.info("✅ Telegram подключён")
     await discord_bot.start(DISCORD_TOKEN)
 
 
