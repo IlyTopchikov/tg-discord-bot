@@ -12,14 +12,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ── Логирование ────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 log = logging.getLogger("bot")
 
-# ── Переменные окружения ───────────────────────────────────────────────────────
 DISCORD_TOKEN        = os.getenv("DISCORD_TOKEN")
 DISCORD_CHANNEL_ID   = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
 DISCORD_CHANNEL_NAME = os.getenv("DISCORD_CHANNEL_NAME", "")
@@ -58,8 +56,8 @@ discord_bot = commands.Bot(command_prefix="/", intents=intents)
 tg_client = TelegramClient(TG_SESSION, TG_API_ID, TG_API_HASH)
 
 
-async def fetch_events_from_tg() -> str | None:
-    log.info("Запрашиваю ивенты из %s", TG_TARGET_BOT)
+async def ask_tg_bot(message: str) -> str | None:
+    """Отправляет сообщение TG-боту и ждёт ответа."""
     try:
         target = await tg_client.get_entity(TG_TARGET_BOT)
     except Exception as e:
@@ -73,7 +71,7 @@ async def fetch_events_from_tg() -> str | None:
         if not future.done():
             future.set_result(event.message.text)
 
-    await tg_client.send_message(target, TG_TRIGGER_MSG)
+    await tg_client.send_message(target, message)
 
     try:
         result = await asyncio.wait_for(future, timeout=TG_RESPONSE_WAIT)
@@ -86,17 +84,8 @@ async def fetch_events_from_tg() -> str | None:
         tg_client.remove_event_handler(_handler)
 
 
-@discord_bot.event
-async def on_ready():
-    log.info("Discord бот запущен: %s (id=%s)", discord_bot.user, discord_bot.user.id)
-
-
-@discord_bot.command(name="event")
-async def event_command(ctx: commands.Context):
-    msg = await ctx.send("⏳ Запрашиваю ивенты из Telegram...")
-    tg_text = await fetch_events_from_tg()
-    await msg.delete()
-
+async def send_to_channel(ctx, result: str | None, title: str, color: int):
+    """Постит результат в нужный канал."""
     channel = None
     if DISCORD_CHANNEL_NAME:
         channel = discord.utils.get(ctx.guild.text_channels, name=DISCORD_CHANNEL_NAME)
@@ -105,17 +94,40 @@ async def event_command(ctx: commands.Context):
     if channel is None:
         channel = ctx.channel
 
-    if tg_text:
+    if result:
         embed = discord.Embed(
-            title="🎉 Текущие ивенты",
-            description=tg_text,
-            color=0x5865F2,
+            title=title,
+            description=result,
+            color=color,
             timestamp=datetime.now(timezone.utc),
         )
         embed.set_footer(text=f"Источник: {TG_TARGET_BOT}")
         await channel.send(embed=embed)
     else:
         await channel.send("❌ Бот Telegram не ответил. Попробуй позже.")
+
+
+@discord_bot.event
+async def on_ready():
+    log.info("Discord бот запущен: %s (id=%s)", discord_bot.user, discord_bot.user.id)
+
+
+@discord_bot.command(name="event")
+async def event_command(ctx: commands.Context):
+    """Команда /event — текущие ивенты."""
+    msg = await ctx.send("⏳ Запрашиваю ивенты из Telegram...")
+    result = await ask_tg_bot(TG_TRIGGER_MSG)
+    await msg.delete()
+    await send_to_channel(ctx, result, "🎉 Текущие ивенты", 0x5865F2)
+
+
+@discord_bot.command(name="mine")
+async def mine_command(ctx: commands.Context):
+    """Команда /mine — шахты."""
+    msg = await ctx.send("⏳ Запрашиваю шахты из Telegram...")
+    result = await ask_tg_bot("Шахты")
+    await msg.delete()
+    await send_to_channel(ctx, result, "⛏️ Шахты", 0x8B4513)
 
 
 async def main():
